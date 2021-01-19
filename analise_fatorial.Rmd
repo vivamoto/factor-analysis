@@ -1,0 +1,838 @@
+---
+title: "Análise Fatorial"
+subtitle: "Análise fatorial exploratória e confirmatória"
+author: "Victor Ivamoto"
+date: "16 de dezembro de 2020"
+output:
+#	word_document: 
+  html_document: 
+    toc: true           						# insere índice
+    toc_float: true     						# índice flutuante
+    toc_depth: 3        						# qtde de níveis do índice
+    code_folding: show						  # opção p/ ocultar/mostrar o código  
+    df_print: kable     						# tipo de tabela
+    number_sections: yes
+    theme: cerulean
+  bookdown::pdf_document2:
+    citation_package: natbib        # natbib / biblatex
+    df_print: kable                 # tipo de tabela
+    fig_crop: no                    # 
+    latex_engine: xelatex           # pdflatex, xelatex, lualatex
+    number_sections: yes
+    toc: yes												# insere índice
+    toc_depth: 3                    # qtde de níveis no índice
+    #extra_dependencies: ["float"]
+    extra_dependencies: ["flafter"]
+    highlight: tango   							# default, tango, pygments, kate, monochrome, espresso, zenburn, haddock, breezedark
+    includes:
+      in_header: preamble.tex
+bibliography: ["referencias.bib"]   # referências bibliográficas
+biblio-style: "apalike"
+link-citations: true    						# links internos p/ referência
+lang: pt-BR   				  						# idioma do documento
+geometry:
+- top=25mm
+- bottom=25mm
+- left=25mm
+- right=25mm
+- heightrounded
+highlight-style: pygments
+linkcolor: blue   									# cor dos links
+#mainfont: Arial								  	# fonte principal
+fontsize: 12pt    									# tamanho da fonte
+sansfont: Verdana
+documentclass: report
+urlcolor: blue    									# cor do link externo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, error=FALSE)
+```
+```{r include=FALSE, eval=TRUE}
+library(huxtable)   # Formata tabela
+
+# Função auxiliar para formatar as tabelas deste relatório.
+show_table <- function(df, title, col1=2){
+  # Input:
+  # df: imported data frame from file with optimization results
+  # title: título da tabela
+	# col1: coluna inicial para formatação
+
+  row <- nrow(df) + 1     # número de linhas
+  col <- ncol(df)         # número de colunas
+  cnames <- colnames(df)  # nome das colunas
+  
+  t <- hux(df, add_colnames = FALSE)
+  t <- rbind(cnames, t)%>%
+		    # Formata cabeçalho da tabela
+		    set_bold(row = 1, everywhere, value = TRUE)          %>%
+		    set_top_border(row = 1, everywhere, value = 1)       %>%
+		    set_bottom_border(row = c(1,row), everywhere, value = 1)    %>%
+		    # Formata os números
+		    set_number_format(row = 2:row, col = col1:col, value = 3)  %>%
+		    # Alinhamento
+		    set_align(row = everywhere, col = everywhere, value = 'right') %>%
+		    # Titulo
+		    set_caption(title) %>%
+		    set_position(value = "center")
+
+  return(t)
+}
+```
+
+# Introdução
+
+Este trabalho apresenta um estudo de Análise Fatorial no questionário da Copa do Mundo de 2014 realizada no Brasil. O dataset original contém 3786 observações e 124 atributos. Alguns desses atributos são irrelevantes para a análise estatística dos dados, e outros podem ser agrupados em conjuntos com elementos semelhantes antes da análise estatística. O agrupamento é necessário para redução da dimensionalidade dos dados.
+
+# Metodologia
+
+O objetivo da Análise Fatorial Exploratória (EFA) é explicar as correlações entre um conjunto de variáveis observadas e um grupo menor de variáveis fundamentais não-observadas chamadas *fatores*. Supõe-se que cada fator explique a variância compartilhada entre duas ou mais variáveis observadas, portanto, tecnicamente, são chamados de fatores comuns.
+
+O modelo pode ser representado como:
+
+$$X_i = a_1F_1 + a_2F_2 + ... + a_pF_p + U_i$$
+
+onde $X_i$ é a *i*-ésima variável observada ($i=1,...,k$), $F_j$ são os fatores comuns ($j=1,...,p$) e $p<k$. $U_i$ é a porção da variável $X_i$ única a esta variável e que não é explicada pelos fatores comuns. $a_i$ é o grau que cada fator contribui para a composição da variável observada.
+
+# Preparação dos Dados
+
+Os dados são preparados antes de realizar a análise fatorial. Essa etapa consiste em excluir as variáveis categóricas e dicotômicas, tratar os valores faltando e com baixo número de respostas. Todas as variáveis usadas neste estudo são ordinais.
+
+```{r echo=TRUE, message=FALSE}
+# Carrega as bibliotecas
+library(readxl)     # importa arquivo Excel
+library(tidyverse)  # manipula as tabelas (datasets)
+library(MVN)        # teste de normalidade multivariável
+library(mctest)     # teste de multicolinearidade (VIF)
+library(REdaS)      # teste de Bartlett
+library(psych)      # realiza EFA
+library(lavaan)     # realiza CFA
+library(semPlot)    # para plotar CFA
+
+# Importa as colunas 11 a 118 que possuem variáveis ordinais.
+# As demais variáveis são categóricas, dicotômicas ou contínuas
+# e não interesam para análise fatorial.
+tbl <- readxl::read_excel('Base_Orginal.xls', sheet = 'CÓDIGO', 
+													col_names = TRUE)[-54][11:117]
+
+# Exclui variáveis dicotômicas
+dic <- apply(tbl, 2 , function(x) length(unique(x)))
+tbl <- tbl[dic > 2]
+```
+
+## Valores faltando
+
+O questionário possui algumas colunas com muitas variáveis faltando, que podem ser excluídas sem prejuízo para análise. Vamos identificar essas colunas e removê-las.
+
+```{r echo=TRUE, warning=FALSE, message=FALSE}
+# Colunas com valores faltando (NA)
+nacols <- colnames(tbl[colMeans(is.na(tbl)) != 0])
+
+# Remove colunas com valores faltando (NA)
+tbl <- tbl %>% select(!nacols)
+```
+
+Além dos valores em branco removidos acima, as respostas da tabela abaixo não interessam na análise. Vamos substituir esses valores pela média dos valores na coluna correspondente, a fim de minimizar o impacto nos cálculos futuros.
+
+| Valor | Significado da resposta |
+|-------|-------------------------|
+| 96 | Não acompanhou os jogos |
+| 97 | Não respondeu |
+| 98 | Outras respostas |
+| 99 | Não sabe |
+
+```{r echo=TRUE}
+# Substitui 96, 97, 98 e 99 pelo valor médio da coluna
+for (x in 96:99){
+	while (max(colMeans(tbl == x), na.rm = TRUE) > 0){
+		# Substitui 96, 97, 98 e 99 por NA
+		col <- which.max(colMeans(tbl == x))
+		tbl[tbl[col] == x,col] = NA
+		# Substitui NA pelo valor médio da coluna
+		tbl <- data.frame(sapply(tbl,
+		        function(x) ifelse(is.na(x),
+		            mean(x, na.rm = TRUE), x)))
+	}
+}
+```
+O tamanho de amostra recomendado é de pelo menos 300 participantes, e as variáveis que são submetidas à análise fatorial devem ter cada uma pelo menos 5 a 10 observações [@comrey_first_2013]. Normalmente dizemos que a proporção de respondentes para variáveis deve ser de pelo menos 10: 1 e que os fatores são considerados estáveis e com validação cruzada com uma proporção de 30: 1. Um tamanho de amostra maior diminuirá o erro em seus dados e, portanto, o EFA geralmente funciona melhor com tamanhos de amostra maiores.
+
+Os dados possuem `r nrow(tbl)` observações e `r ncol(tbl)`, ou seja a proporção de `r round(nrow(tbl) / ncol(tbl), 1)` satisfaz o critério 
+
+## Testes de normalidade
+
+A análise fatorial pressupõe que os dados possuam distribuição normal (Gaussiana) tanto uni variável quanto multivariável [@child_essentials_2006], e a ausência de *outliers* [@field_discovering_2009]. 
+
+As distribuições das variáveis não influencia no uso da análise fatorial para descrever as relações entre as variáveis. Se as variáveis são normalmente distribuídas, a solução é aprimorada. Na medida em que a normalidade falha, a solução é degradada, mas ainda pode valer a pena [@tabachnick_using_2006].
+
+A normalidade multivariada é assumida quando a inferência estatística é usada para determinar o número de fatores. A normalidade multivariada é a suposição de que todas as variáveis e todas as combinações lineares de variáveis são normalmente distribuídas. Embora os testes de normalidade multivariada sejam excessivamente sensíveis, a normalidade entre variáveis únicas é avaliada por assimetria e curtose. Se uma variável tem assimetria e curtose substanciais, a transformação da variável é considerada [@tabachnick_using_2006]. 
+
+Em uma grande amostra, o nível de significância da assimetria não é tão importante quanto seu tamanho real (pior quanto mais distante de zero) e a aparência visual da distribuição. Em uma grande amostra, o impacto do afastamento da curtose zero também diminui. Por exemplo, as subestimativas da variância associadas à curtose positiva (distribuições com caudas curtas e grossas) desaparecem com amostras de 100 ou mais casos; com curtose negativa, a subestimação da variância desaparece com amostras de 200 ou mais [@waternaux_asymptotic_1976].
+
+Isso posto, a análise de normalidade não se faz necessário no presente estudo, dado que o número de amostras é substancialmente elevado. 
+
+## Outliers
+
+Existem diversas técnicas para identificação de outliers. Este estudo considerou os dados dentro do intervalo do box plot como observações típicas, e as amostras fora desse intervalo como observações atípicas ou *outliers*. Formalmente, o intervalo é dado pela seguinte equação:
+
+$$I = [Q_{25} - 1,5 IQR,\ \  Q_{75} + 1,5 IQR]$$
+Onde $Q_{25}$ e $Q_{75}$ são os quartis de 25% e 75% respectivamente, e $IQR$ é o intervalo inter-quartil dado por:
+$$IQR = Q_{75} - Q_{25} $$
+Algumas perguntas do questionário possuem concentração em uma ou duas respostas, causando uma aparente anomalia na distribuição dos dados. Neste caso, fica a critério do pesquisador remover essas variáveis atípicas. Os box plots abaixo mostram as variáveis com *outliers*, e os histogramas mostram as distriuições destas variáveis. 
+
+```{r box, message=FALSE}
+# Monta lista com nomes das variávies com outliers
+# Outliers são amostras fora do intervalo:
+# I = [q25 - 1,5 IQR, q75 + 1,5 IQR], 
+# onde q25 e q75 são os quartis de 25% e 75, e IQR é o 
+# intervalo interquartil
+outliers <- c()   # lista de outliers
+for (c in 1:ncol(tbl)){
+	q25 <- quantile(tbl[,c], 0.25) # 1º quantil (25%)
+	q75 <- quantile(tbl[,c], 0.75) # 2º quantil (75%)
+	iqr <- q75 - q25               # intervalo inter-quantil
+	lim_inf <- q25 - 1.5 * iqr     # limite inferior
+	lim_sup <- q75 + 1.5 * iqr     # limite superior
+	outlier_ind <- which(tbl[,c] < lim_inf | tbl[,c] > lim_sup)
+	# guarda somente os outliers
+	if (nrow(tbl[outlier_ind,]) > 0){
+		outliers <- c(outliers, names(tbl[c]))
+	}
+}
+
+# Boxplot das variáveis com outliers
+n <-10
+for (i in 1:(1 + length(outliers) %/% n)) {
+	inicio <- i * n - (n - 1)
+	fim <- min(inicio + n -1, length(outliers))
+	boxplot(tbl[, outliers[inicio:fim]], col="steelblue")	
+}
+
+```
+
+```{r hist}
+# Histograma das variáveis com outliers
+for (i in 1:(1 + length(outliers) %/% n)) {
+	inicio <- i * n - (n - 1)
+	fim <- min(inicio + n -1, length(outliers))
+	hist(tbl[, outliers[inicio:fim]], col="steelblue")	
+}
+```
+
+## Correlação
+
+A correlação $r$ deve ser 0,30 ou maior, pois qualquer coisa menor sugeriria uma relação realmente fraca entre as variáveis [@tabachnick_using_2006]. Os pontos claros no correlograma indicam baixa correlação, e os escuros indicam alta correlação. Os pontos azuis são correlação positiva, e os vermelhos são negativa.
+
+```{r}
+corrgram::corrgram(tbl)
+```
+
+## Teste de Kaiser-Meyer-Olkin (KMO)
+
+O índice de KMO, também conhecido como índice de adequação da amostra, é um teste estatístico que sugere a proporção de variância dos itens que pode estar sendo explicada por uma variável latente [@lorenzo-seva_hull_2011]. Tal índice indica o quão adequada é a aplicação da EFA para o conjunto de dados [@hair_alise_2000]. O KMO é calculado por meio do quadrado das correlações totais dividido pelo quadrado das correlações parciais, das variáveis analisadas [@field_discovering_2009]. Seu valor pode variar de zero a um. Valores iguais ou próximos a zero indicam que a soma das correlações parciais dos itens avaliados é bastante alta em relação à soma das correlações totais. Nesses casos, possivelmente a análise fatorial será inapropriada [@pasquali_fundamentos_2003]^[http://pepsic.bvsalud.org/scielo.php?script=sci_arttext&pid=S1677-04712012000200007].  
+
+O índice KMO é dado pela seguinte equação:
+$$KMO = \frac{\sum_{i=1}^m\sum_{j=1}^m r_{ij}^2}
+{\sum_{i=1}^m\sum_{j=1}^m r_{ij}^2 + \sum_{i=1}^m\sum_{j=1}^m a_{ij}^2}, \;\;\; j \ne i$$
+
+onde $R$ é a matriz de correlação baseado nos dados $X$, $r_{ij}$ é a correlação entre as variáveis $i$ e $j$, e $a_{ij}$ é a correlação parcial.
+
+A medida de adequação da amostra (MSA) é dada pela seguinte equação:
+
+$$MSA_i=\frac{\sum_{j=1}^kr_{ij}^2}{\sum_{j=1}^k r_{ij}^2 + a_{ij}^2},  \;\;\; j\ne i$$
+
+Como referência, @kaiser_second_1970 sugere a seguinte regra de interpretação do resultado:
+
+| KMO    | Referência |
+|---------|-----------|
+| 0,9 - 1,0 | Maravilhoso |
+| 0,8 - 0,9 | Meritório |
+| 0,7 - 0,8 | Moderado |
+| 0,6 - 0,7 | Medíocre |
+| 0,5 - 0,6 | Miserável |
+| menos de 0,5 | Inaceitável |
+
+Para os testes KMO e MSA, fez-se uso da metodologia de Nakazawa proposta para o R como sugerida por Bates (2011).
+
+```{r echo=TRUE}
+# Cálculo do KMO e MSA
+x <- subset(tbl, complete.cases(tbl))
+r <- cor(x)     # correlação de x
+r2 <- r^2       
+i <- solve(r)   # resolve equação a %*% x = b para x
+d <- diag(i)    # diagonal da matriz i
+p2 <- (-i/sqrt(outer(d,d)))^2
+diag(r2) <- diag(p2)<-0
+KMO <- sum(r2)/(sum(r2)+sum(p2))
+MSA <- colSums(r2)/(colSums(r2)+colSums(p2))
+```
+
+O índice KMO em torno de `r round(KMO, 2)` está maravilhoso para realizar a análise fatorial. 
+
+A medida de adequação da amostra pode ser interpretada com as seguintes orientações [@hair_alise_2000]: 
+
+| MSA  | Interpretação |
+|-------------|-----------|
+|0,80 ou acima| admirável | 
+|0,70 ou acima| mediano |
+|0,60 ou acima| medíocre |
+|0,50 ou acima| ruim |
+|abaixo de 0,50| inaceitável |
+
+
+A tabela seguinte mostra a distribuição da MSA de acordo com os critérios estabelecidos anteriormente. Todas as variáveis estão com MSA acima de 0,50, considerado aceitável.
+
+```{r echo=FALSE}
+df <- data.frame(Admirável   = round(100*mean(0.8 < MSA), 2),
+                 Mediano     = round(100*mean(0.7 < MSA & MSA <= 0.8), 2),
+                 Medíocre    = round(100*mean(0.6 < MSA & MSA <= 0.7), 2),
+                 Ruim        = round(100*mean(0.5 < MSA & MSA <= 0.6), 2),
+                 Inaceitável = round(100*mean(MSA <= 0.5), 2))
+#show_table(df, 'Distribuição de MSA nos dados (%).', col1=1)
+df
+```
+
+## Fator de inflação de variância (VIF)
+
+O fator de inflação de variância (VIF) indica o efeito que as outras variáveis independentes têm sobre o erro padrão de um coeficiente de regressão. O fator de inflação de variância está diretamente relacionado ao valor de tolerância ($VIF_i = 1/TOL_i$). Valores VIF altos também indicam um alto grau de colinearidade ou multicolinearidade entre as variáveis independentes [@hair_alise_2000].
+
+A multicolinearidade cria variância “compartilhada” entre variáveis, diminuindo assim a capacidade de prever a medida dependente, bem como averiguar os papéis relativos de cada variável independente.
+
+Verificamos a inexistência de multicolinearidade nos dados. Caso houvesse, removeríamos as variáveis com IMC maiores que 10.
+
+```{r echo=TRUE}
+# Verifica multicolinearidade
+model <- lm('P1A~.', data = tbl)
+imc <-  imcdiag(model, method = "VIF", vif = 10)[[1]][,1]
+# Nenhuma variável > 10 encontrada
+mean(imc > 10)
+```
+
+## Teste de esfericidade de Bartlett
+
+O teste de esfericidade de Bartlett avalia em que medida a matriz de covariância é similar a uma matriz identidade, ou seja, não apresentam correlações entre si. Segundo @hair_alise_2000, esse teste avalia, também, a significância geral de todas as correlações em uma matriz de dados. Valores do teste de esfericidade de Bartlett com níveis de significância p-valor < 0,05 indicam que a matriz é fatorável [@tabachnick_using_2006], rejeitando a hipótese nula de que a matriz de dados é similar a uma matriz-identidade[@damasio_uso_2012].
+
+Se as variáveis estão perfeitamente correlacionadas, apenas um fator é suficiente. Se são ortogonais, então o número de fatores iguala o número de variáveis. Aumentar o tamanho da amostra faz com que o teste Bartlett se torne mais sensível na detecção de correlações entre as variáveis [@hair_alise_2000].  
+
+O teste apresenta valor estatisticamente significante, com p-valor próximo a zero, indicando que existem correlações suficientes entre as variáveis para se continuar a análise.
+
+```{r echo=TRUE}
+REdaS::bart_spher(tbl)
+```
+
+# Análise Fatorial Exploratória (EFA)
+
+No modelo matemático de "análise fatorial clássica", $p$ denota o número de variáveis ($X_1, X_2, ..., X_p$) e $m$ denota o número de fatores subjacentes ($F_1, F_2, ..., F_m$). $X_j$ é a variável representada em fatores latentes. Portanto, este modelo assume que existem $m$ fatores subjacentes em que cada variável observada é uma função linear desses fatores juntamente com uma variável residual. Este modelo pretende reproduzir as correlações máximas.
+$$X_j = a_{j1}F_1 + a_{j2}F_2+...+a_{jm}F_m+\epsilon _j$$
+
+Onde $j=1,2,...,p$. As cargas fatoriais são $a_{j1}, a_{j2}, ..., a_{jm}$, o que denota que $a_{j1}$ é a carga fatorial da $j$-ésima variável no primeiro fator [@yong_beginners_2013].
+
+Uma decisão crítica em análise fatorial é o número de fatores a serem mantidos para interpretação e uso posterior. Uma base quantitativa exata para decidir o número de fatores a serem extraídos ainda não foi desenvolvida. Critérios de parada para o número de fatores a serem extraídos incluem a raiz latente ou autovalor, definição a priori, percentual de variância e teste *scree* [@hair_alise_2000].
+
+Uma maneira de determinar o número de fatores ou componentes em uma matriz de dados ou uma matriz de correlação é examinar o gráfico *scree* dos autovalores sucessivos. Quebras bruscas no gráfico sugerem o número apropriado de componentes ou fatores a serem extraídos. A análise paralela é uma técnica alternativa que compara a sequência de fatores dos dados observados com a de uma matriz de dados aleatórios do mesmo tamanho da original. Isso pode ser feito para dados contínuos, dicotômicos ou politômicos usando correlações de Pearson, tetracóricas ou policóricas [@revelle_psych_2017].
+
+Além de determinar o número de fatores, as variáveis com baixa comunalidade são excluídas do modelo. O tamanho da comunalidade é um índice útil para avaliar o quanto de variância em uma variável particular é explicado pela solução fatorial. Valores mais altos de comunalidade indicam que uma grande quantia da variância em uma variável foi extraída pela solução fatorial. Comunalidades pequenas mostram que uma porção substancial da variância da variável não é explicada pelos fatores. A despeito de nenhuma diretriz estatística indicar exatamente o que é “pequeno” ou “grande”, considerações práticas sugerem um nível mínimo de 0,50 para comunalidades nesta análise [@hair_alise_2000]. Para efeitos deste estudo, o valor mínimo de 0,40 foi adotado.
+
+A comunalidade é a variância nas variáveis observadas que são contabilizadas por um fator comum ou variância comum [@child_essentials_2006]. A comunalidade é denotada por $h^2$ e é a soma das correlações quadradas da variável com os fatores. A fórmula para derivar as comunalidades é $h_j^2 = a_{j1}^2 + a_{j2}^2 + ...+a_{jm}^2$ onde $a$ são as cargas para variáveis $j$ [@yong_beginners_2013].
+
+A exclusão começa com a variável com menor comunalidade, então a comunalidade de todas as variáveis é recalculado e a próxima variável é removida. O processo prossegue até que todas as variáveis possuam valor acima de 0,40. Em seguida, é realizada a análise fatorial.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+nfactors <- psych::fa.parallel(tbl, plot = FALSE)
+nfact <- nfactors$nfact  # Número de fatores 
+corMat <- cor(tbl)       # Matriz de correlação
+N <- nrow(tbl)           # Número de observações
+faPC <- fa(r = corMat, nfactors = nfact, n.obs = N, rotate = "varimax")
+
+# Remove as variáveis com baixa comunalidades (coluna h2 < 0,40).
+h2 <- faPC$communality            # Comunalidade (coluna h2)
+exclui <- mean(h2 < 0.40) > 0     # TRUE se houver h2 < 0,40
+while(exclui){
+	tbl <- tbl[!(h2 == min(h2))]    # Exclui variável com menor h2
+	nfactors <- fa.parallel(tbl, plot = FALSE)  # Recalcula nfactors
+	nfact <- nfactors$nfact         # Número de fatores
+	N <- nrow(tbl)                  # Número de linhas na nova tabela
+	corMat <- cor(tbl)              # Recalcula a correlação
+	faPC <- fa(r = corMat, nfactors = nfact, n.obs = N, rotate = "varimax")
+	h2 <- faPC$communality          # Coluna h2 
+	exclui <- mean(h2 < 0.40) > 0   # Continua enquanto h2 < 0,40
+}
+```
+Após remover as variáveis com baixa comunalidade ($h^2<0,40$), prosseguimos para a análise fatorial.
+```{r echo=TRUE}
+# Análise fatorial
+fc <- factanal(tbl, factors=nfact, scores="regression")
+fa(r = corMat, nfactors = nfact, n.obs = N, rotate = "varimax")
+
+```
+
+Diagrama da carga fatorial. Identifica os fatores com as variáveis correspondentes.
+```{r echo=FALSE} 
+psych::fa.diagram(faPC, size=c(10,8))
+```
+
+A maioria das soluções fatoriais não resulta em uma estrutura simples (uma única carga alta para cada variável em um único fator). Geralmente uma ou mais variáveis tem cargas de tamanho moderado sobre diversos fatores, todas significantes. Quando uma variável demonstra ter mais de uma carga significante, ela é chamada de carga cruzada [@hair_alise_2000]. Mais precisamente, um item de "carregamento cruzado" é um item com carga de 0,32 ou superior em dois ou mais fatores [@costello_best_2005]. Os sinais das cargas mostram a direção da correlação e não afetam a interpretação da magnitude da carga fatorial ou o número de fatores a reter [@kline_easy_1994]. Como o modelo que será criado considera em determinado fator apenas a variável com maior carga fatorial, a carga cruzada não afeta o modelo.
+
+# Análise Fatorial Confirmatória (CFA)
+
+Modelagem de equações estruturais (SEM) é um método confirmatório que fornece um meio abrangente para validar o modelo de medição de construtos latentes. O procedimento de validação é denominado Análise Fatorial Confirmatória (CFA). O método CFA tem a capacidade de avaliar a Unidimensionalidade, Validade e Confiabilidade de um construto latente. O pesquisador precisa realizar CFA para todos os construtos latentes envolvidos no estudo antes de modelar sua inter-relação em um modelo estrutural (SEM). No entanto, a avaliação da unidimensionalidade deve ser feita antes de avaliar a validade e confiabilidade.
+
+Com o CFA, qualquer item que não se encaixe no modelo de medição devido à carga fatorial baixa deve ser removido do modelo. A adequação de um modelo de medição é indicada por meio de determinados índices de adequação. No entanto, a exclusão de itens não deve exceder 20% do total de itens em um modelo. Caso contrário, o próprio construto particular é considerado inválido, uma vez que falhou na própria “confirmação”. Os pesquisadores poderiam executar o CFA para cada modelo de medição separadamente ou executar os modelos de medição agrupados de uma vez. No entanto, o CFA para modelos de medição agrupados é mais eficiente e altamente sugerido [@zainudin_handbook_2012].
+
+```{r modelo, echo=FALSE}
+# Cria automaticamente o modelo baseado no resultado da EFA
+# O modelo associa cada variável ao fator com a maior carga fatorial.
+# O sinal da carga é mostra a direção da correlação e não afeta a análise.
+faResult <- data.frame(abs(faPC$Structure %>% head(nrow(tbl))))
+MR <- apply(faResult, 1, function(x) colnames(faResult[which.max(x)]))
+
+# Função auxiliar para criar o modelo
+create_fml <- function(x) {
+	varNames <- names(MR[MR == x])
+	vars <- str_c(varNames, collapse = ' + ')
+	fml <- paste0(x, " =~ ", vars)
+	return(fml)
+}
+
+# Modelo
+mdl <- str_c(sapply(unique(MR), create_fml))
+tibble::tibble("Modelo inicial." = mdl)
+```
+
+Cada variável é associada ao fator com maior carga fatorial, evitando assim carga cruzada e simplificando a análise. Executamos a análise fatorial confirmatória para esse modelo e analisamos os índices.
+
+Para que algo seja rotulado como um fator, ele deve ter pelo menos três variáveis, embora isso dependa do desenho do estudo [@tabachnick_using_2006]. Como regra geral, os fatores que têm duas ou menos variáveis devem ser interpretados com cautela. Um fator com duas variáveis só é considerado confiável quando as variáveis são altamente correlacionadas entre si ($r> 0,70$), mas razoavelmente não correlacionadas com outras variáveis [@yong_beginners_2013]. A tabela abaixo resume a correlação das variáveis dos fatores com 2 variáveis.
+
+```{r}
+# Correlação dos fatores com 2 variáveis
+df <- data.frame(MR = character(), Variaveis = character(), Correlação = double())
+fator_bom <- c()   # lista de fatores com correlação >= 0,70
+fator_ruim <- c()  # lista de fatores com correlação < 0,70
+for (fator in unique(MR)){
+	varNames <- names(MR[MR == fator])   # lista de variáveis no fator
+	# Calcula correlação dos fatores com 2 variáveis
+	if (length(varNames) == 2) {
+		correlacao <- round(cor(tbl[varNames[1]], tbl[varNames[2]]), 3) 
+		df <- rbind(df, c(fator, paste0(varNames[1], ' e ', varNames[2]), correlacao))
+		# Guarda fatores com correlação > 0,70
+		if (correlacao >= 0.7) {
+			fator_bom <- c(fator_bom, fator)
+		}else{
+			fator_ruim <- c(fator_ruim, fator)
+		}
+	}
+}
+fatores_ruim <- str_c(fator_ruim, collapse = ', ' )
+colnames(df) <- c('Fator', 'Variáveis', 'Correlação')
+df
+```
+
+```{r echo=FALSE}
+# Monta uma lista com todas as variáveis do modelo, iniciando
+# com as variáveis de MR4.
+vars <- c()
+for (i in 1:length(mdl)){
+	fator <- str_extract_all(mdl,'[a-zA-Z0-9]+')[[i]][1]
+	if (fator == 'MR4'){
+		vars <- c(str_extract_all(mdl,'[a-zA-Z0-9]+')[[i]][-1], vars)
+	}else{
+		vars <- c(vars, str_extract_all(mdl,'[a-zA-Z0-9]+')[[i]][-1])
+	}
+}
+```
+Os fatores `r fatores_ruim` possuem correlação abaixo de 0,70 e podem ser retirados do modelo. As variáveis do fator `r fator_bom` possuem correlação entre si acima de 0,70 e alta correlação com variáveis fora do fator (máxima correlação de `r round(max(cor(tbl[vars])[1, -c(1,2)]),3)` e `r round(max(cor(tbl[vars])[2, -c(1,2)]),3)`), portanto esse fator também pode ser removido do modelo. O novo modelo teórico está na tabela \@ref(tab:mdl2):
+
+```{r mdl2}
+# Remove do modelo os fatores com duas variáveis
+for (fator in fator_ruim){
+	mdl <- mdl[!str_detect(mdl, fator)]
+} 
+mdl <- mdl[!str_detect(mdl, fator_bom)]
+tibble::tibble("Modelo apenas com fatores com mais de duas variáveis." = mdl)
+```
+Qualquer item com carga fatorial menor que 0,6 e $R^2$ menor que 0,4 deve ser excluído do modelo de medição. No entanto, o pesquisador pode não fazê-lo se os índices de adequação para aquele modelo de medição já atingiram o nível exigido conforme mostrado na Tabela 1 (Categoria do Índice e nível de aceitação). Um item com carga fatorial baixa significa simplesmente que um item específico é considerado inútil para medir aquele construto específico. Manter um item inútil em um modelo afetará o índice de adequação do modelo. Um item pode ter carga fatorial baixa por vários motivos. Entre as razões estão declarações ambíguas, declaração de duplo sentido, declaração sensível, declaração tendenciosa, etc [@zainudin_handbook_2012].
+
+O modelo apenas com variáveis com cargas fatoriais acima de 0,60 está na tabela \@ref(tab:mdl-6)
+
+```{r mdl-6}
+# Cria modelo apenas com variáveis com cargas fatoriais > 0,60
+n <- length(strsplit(mdl, ' '))   # Quantidade de fatores no modelo
+MR <- sapply(1:n, function(x) strsplit(mdl, ' ')[[x]][1])  # Lista de fatores
+mdl0 <- mdl
+mdl <- c()
+for (fator in MR){
+	varNames <- names(faPC$loadings[,fator][abs(faPC$loadings[,fator]) > 0.6])
+	if (length(varNames) > 2){
+		vars <- str_c(varNames, collapse = ' + ')  # junta as variáveis
+		fml <- paste0(fator, " =~ ", vars)  # monta a fórmula
+		mdl <- c(mdl, fml)   # adiciona fórmula ao modelo
+	}
+}
+tibble::tibble("Modelo com carga fatorial > 0,60" = mdl)
+```
+
+Identificamos seis fatores capazes de agregar as variáveis mais significativas.
+
+Diagrama de trajetória para modelos SEM.
+```{r diag, echo=TRUE, message=FALSE, results='hide'}
+# Calcula os índices de fitness do CFA
+fit <- lavaan::cfa(mdl,data= tbl)
+
+# Diagrama
+semPlot::semPaths(fit, 'par', edge.label.cex=1.2,fade=FALSE)
+```
+
+## Modelagem por Equações Estruturais (SEM)
+
+Após a análise fatorial confirmatória (CFA), realizamos a modelagem por equações estruturais. Os fatores são nomeados de acordo com as perguntas do questionário. Observe que algumas perguntas possuem sentimento positivo, como por exemplo "Este evento significou muito para mim", enquanto que outras perguntas possuem sentimento negativo, como em "me senti aborrecido". A coerência nas respostas a estas perguntas reflete na correlação negativa entre os fatores MR5 e MR2, MR5 e MR11, e MR1 e MR3.
+
+* **MR1 - Identificação com o evento**
+	+ P7A: Este evento significou muito para mim
+	+ P7B: Estive muito apegado(a) à Copa do Mundo de 2014
+	+ P7C: Identifiquei-me muito com este evento
+	
+* **MR2 - Transparência do governo**
+	+ P7BA: As obras da Copa do Mundo no Brasil foram EXECUTADAS  de forma transparente
+	+ P7BB: Todo o processo da Copa do Mundo no Brasil foi DIVULGADO pelo Governo e pela mídia de forma clara
+	+ P7BC: Os moradores locais puderam ver e acompanhar claramente o progresso e a situação das obras da Copa do Mundo no Brasil
+	+ P7BD: As obras da Copa do Mundo no Brasil foram REALIZADAS com total transparência
+	+ P7BE: O Governo divulgou informações suficientes aos moradores locais sobre o andamento das obras da Copa do Mundo no Brasil
+	
+* **MR3 - Insatisfação**
+	+ P2C: Me senti Aborrecido
+	+ P2E: Me senti Insatisfeito
+	+ P2P: Eu me senti Descontente
+	
+* **MR5 - Incompetência e corrupção**
+	+ P7AA: Houve irregularidades na construção das obras da Copa do Mundo no Brasil
+	+ P7AB: Houve empresas que não cumpriram os padrões exigidos nos projetos da Copa do Mundo no Brasil
+	+ P7AC: Há uma sensação de que houve desvio de fundos públicos e superfaturamento nas obras da Copa no Brasil
+	
+* **MR6 - Compaixão**
+	+ P2B: Me senti Inspirado
+	+ P2I: Eu senti Amor
+	+ P2J: Eu senti Carinho
+	+ P2K: Eu senti Compaixão
+	
+* **MR11 - Confiança no governo**
+	+ P6AA: O Governo fez o que é correto para o bom desenvolvimento da Copa do Mundo
+	+ P6AB: O Governo fez o que é correto para a boa organização da Copa do Mundo
+	+ P6AC: O Governo agiu de acordo com os interesses dos moradores da cidade onde você mora
+	+ P6AD: Eu confiei nas decisões tomadas pelo Governo sobre a Copa
+	+ P6AE: O Governo se esforçou em incorporar os moradores da cidade no planejamento da Copa
+
+```{r mdlsem}
+mdl_sem <- c("MR3 ~ MR5", 
+						 "MR1 ~ MR6 + MR2 + MR11",  
+						 "MR6 ~ MR2 + MR11",  
+						 #"MR2 ~ MR11",
+						 mdl)
+tibble::tibble("Modelo final" = mdl_sem)
+```
+
+O modelo teórico proposto
+```{r diag-final, echo=TRUE, message=FALSE, results='hide'}
+# Calcula os índices de fitness do CFA
+fit <- lavaan::cfa(mdl_sem,data= tbl)
+# Diagrama
+semPlot::semPaths(fit, 'par', edge.label.cex=1.0,fade=FALSE)
+```
+
+```{r}
+summary(fit, fit.measures=TRUE)
+```
+
+## Índices de adequação
+
+No SEM, existem vários índices de adequação (fitness) que refletem o quão adequado é o modelo aos dados disponíveis. No entanto, não há acordo entre os pesquisadores sobre quais índices de adequação usar. @hair_alise_2000 recomendam o uso de pelo menos um índice de adequação de cada categoria de ajuste do modelo. Existem três categorias de ajuste de modelo, nomeadamente Ajuste Absoluto, Ajuste Incremental e Ajuste Parcimonioso.
+
+A escolha do índice para escolher em cada categoria para relatar depende de qual literatura está sendo referenciada. As informações sobre a categoria de ajuste do modelo e seu nível de aceitação são apresentados na tabela a seguir.
+
+| Índice | Nome do Índice | Nível de aceitação |
+|--------|----------------|--------------------|
+| Chi-quadrado | Discrepancy Chi Square | p-valor > 0,05 |
+| **RMSEA** | **Root Mean Square of Error Approximation** | **RMSEA < 0,08** |
+| **GFI** | **Goodness of Fit Index** | **GFI > 0,90** |
+| AGFI | Adjusted Goodness of Fit | AGFI > 0,90 |
+| **CFI** | **Comparative Fit Index** | **CFI > 0,90** |
+| TLI | Tucker-Lewis Index | TLI > 0,90 |
+| NFI | Normed Fit Index | NFI > 0,90 |
+| **Chi-quadrado/df** | **Chi Square/Degrees of Freedom** | **Chi-quadrado/df < 3,0** |
+Os índices em negrito são recomendados, já que são frequentemente reportados na literatura [@zainudin_handbook_2012].
+
+Os valores de corte aceitáveis relatados pelos pesquisadores podem variar dependendo do suporte da literatura que eles estão se referindo. Os índices calculados para o modelo proposta está na tabela \@ref(tab:indicadores).
+
+```{r indicadores}
+# Função auxiliar que monta a mensagem do comentário da tabela
+comentario <- function(x) {
+	res = 'NÃO '
+	if ((deparse(substitute(x)) == 'pvalue'  & x > 0.05) |
+			(deparse(substitute(x)) == 'RMSEA'  & x < 0.08) |
+			(deparse(substitute(x)) == 'GFI'	  & x > 0.90) |
+			(deparse(substitute(x)) == 'AGFI'   & x > 0.90) |
+			(deparse(substitute(x)) == 'CFI'	  & x > 0.90) |
+			(deparse(substitute(x)) == 'TLI'	  & x > 0.90) |
+			(deparse(substitute(x)) == 'NFI' 	  & x > 0.90) |
+			(deparse(substitute(x)) == 'chisq_gl'	& x < 3 ))
+	{ res = ''}
+	msg = paste0('O nível recomendado ', res, 'FOI alcançado.')
+	return(msg)
+}
+
+fitM <- fitMeasures(object = fit, fit.measures = 
+											c('pvalue', 'chisq', 'rmsea', 'gfi', 'agfi', 
+												'cfi', 'tli', 'nfi', 'df'))
+
+# Extrai os índices do sumário do CFA
+pvalue <- round(fitM[1], 3) # p-valor
+chisq <- round(fitM[2], 3)  # Chi quadrado
+RMSEA <- round(fitM[3], 3)  # Root Mean Square of Error Approximation
+GFI   <- round(fitM[4], 3)  # Goodness of Fit Index
+AGFI <- round(fitM[5], 3)   # Adjusted Goodness of Fit Index
+CFI <- round(fitM[6], 3)    # Comparative Fit Index
+TLI <- round(fitM[7], 3)    # Tucker-Lewis Index
+NFI <- round(fitM[8], 3)    # Normed Fit Index 
+df  <- round(fitM[9], 3)   	# Graus de liberdade
+chisq_gl = round(fitM[2] / fitM[9], 3)   # Chi quadrado / graus de liberdade
+
+# Mostra a tabela com os índices
+df <- data.frame('Índice' = c('Chi-quadrado (p-valor)', 'RMSEA', 'GFI', 'AGFI',
+															'CFI', 'TLI', 'NFI', 'Chi-quadrado/df'),
+								 'Valor' = c(pvalue, RMSEA, GFI, AGFI, CFI, TLI, NFI, chisq_gl),
+								 'Comentário' = c(comentario(pvalue), 
+																	comentario(RMSEA), 
+																	comentario(GFI), 
+																	comentario(AGFI), 
+																	comentario(CFI), 
+																	comentario(TLI), 
+																	comentario(NFI), 
+																	comentario(chisq_gl)))
+#show_table(df, 'Índices de adequação.')
+df
+```
+
+# Confiabilidade
+
+Confiabilidade é uma avaliação do grau de consistência entre múltiplas medidas de uma variável [@hair_alise_2000]. A avaliação da confiabilidade de um modelo de medição pode ser feita usando os seguintes critérios [@zainudin_handbook_2012]:
+
+- Alfa de Cronbach
+- Confiabilidade Composta (CR)
+- Variância Média Extraída (AVE)
+
+**Alfa de Cronbach** é uma medida de confiabilidade que avalia a consistência da escala inteira. O limite inferior para o alfa de Cronbach geralmente aceito é de 0,70, apesar de poder diminuir para 0,60 em pesquisa exploratória. Uma questão na avaliação do alfa de Cronbach é sua relação positiva com o número de itens na escala. Valores mais restritos devem ser usados com maior número de itens, já que o valor de confiabilidade aumenta mesmo com grau igual de intercorrelação. [@hair_alise_2000]
+
+Uma regra prática é que um alfa de 0,70 indica confiança aceitável, 0,80 ou mais indica boa confiança, e 0,90 ou superior é extremamente bom [@ian_ruginski_structural_2019].
+
+Os valores de alfa de Cronbach estão acima de 0,70 para todos os fatores, indicando que o modelo é confiável, conforme mostra a tabela \@ref(tab:rel).
+```{r rel}
+reliability <- semTools::reliability(fit)
+data.frame(Reliability = dimnames(reliability)[[1]], reliability)
+```
+
+
+A **Confiabilidade Composta (CR)** indica a confiabilidade e a consistência interna de um construto latente. Um valor de CR > 0,6 é necessário para atingir a confiabilidade composta para um construto [@zainudin_handbook_2012].
+
+A **Variância Média Extraída (AVE)** indica a porcentagem média de variação explicada pelos itens de medição para um construto latente. Um AVE > 0,5 é necessário para cada construto (AVE é calculado usando a fórmula fornecida).
+
+$$AVE = \frac{\sum K^2}{n}$$
+
+$$CR = \frac{(\sum K)^2}{(\sum K)^2 + (\sum {1-K^2})}$$
+
+onde $K$ é a carga fatorial de cada item, e $n$ é o número de itens no fator.
+
+A confiabilidade composta e variância média extraída estão com valores desejáveis em todos os fatores, como mostra a tabela \@ref(tab:ave).
+
+```{r ave, echo=FALSE}
+fit <- lavaan::cfa(mdl_sem,data=tbl, std.lv=TRUE)
+ypam <- lavaan::parameterEstimates(fit, standardized=TRUE)
+df <- data.frame('MR' = character(),
+                 'CR' = double(),
+                 'AVE' = double(),
+                 stringsAsFactors = FALSE)
+
+# Função auxiliar para analisar resultado de CR e AVE e
+# escrever comentário na tabela
+comentario <- function(CR, AVE) {
+	if (CR >= 0.6) {
+		msg = 'CR aceitável, '
+	}else {
+		msg = 'CR inaceitável, '
+	}
+	if (AVE >= 0.5) {
+		msg = paste0(msg, 'AVE aceitável.')
+	}else{
+		msg = paste0(msg, 'AVE inaceitável.')
+	}
+	return(msg)
+}
+
+# Calcula os índices CR e AVE
+for (i in 1:12) {
+	MR  <- paste0('MR',i)
+	if (nrow(ypam[ypam$lhs == MR,]) > 0){
+		K   <- ypam[ypam$lhs == MR,]$est
+		CR  <- round(sum(K)^2 / (sum(K)^2 + sum(1 - K^2)), 3)
+		AVE <- round(sum(K^2) / length(K), 3)
+		com <- comentario(CR, AVE)
+		df  <- rbind(df, c(MR, CR, AVE, com))
+	}
+}
+colnames(df) <- c('Fator', 'CR', 'AVE', 'Comentário')
+show_table(df, 'Confiabilidade Composta e Variância Média Extraída.', col1=2)
+#df
+```
+
+## Validade discriminante
+
+Validade discriminante é o grau em que um construto é verdadeiramente diferente dos demais. Logo, validade discriminante elevada oferece evidência de que um construto é único e captura alguns fenômenos que outras medidas não conseguem [@hair_alise_2000].
+
+A validade discriminante pode ser avaliada por meio da razão heterotraço-monotraço (HTMT) das correlações proposto por @henseler_new_2015. Especificamente, ele avalia a correlação média entre os indicadores entre os construtos (ou seja, correlações de heterotraço-heterométodo), em relação à correlação média entre os indicadores dentro do mesmo construto (ou seja, correlações monotraço-heterométodo). Os valores HTMT resultantes são interpretados como estimativas de correlações entre construtos. Valores absolutos das correlações são recomendados para calcular a matriz HTMT [@jorgensen_textttsemtools_2020].
+
+O uso de HTMT como critério envolve compará-lo a um limite predefinido. Se o valor do HTMT for superior a esse limite, pode-se concluir que não há validade discriminante [@henseler_new_2015]. O nível de limite exato do HTMT é discutível; afinal, “quando uma correlação é próxima de um”? Alguns autores sugerem um limite de 0,85 [@clark_constructing_1995; @kline_principles_2005], enquanto outros propõem um valor de 0,90 [@gold_knowledge_2001; @teo_trust_2009]. 
+
+A avaliação da validade discriminante usando a razão Heterotraço-Monotraço indica que o modelo é válido, já que todos os valores estão abaixo de 0,80.
+```{r echo=TRUE}
+semTools::htmt(mdl, tbl, sample.cov = NULL, missing = 'listwise', 
+							 ordered = NULL, absolute = TRUE)
+```
+
+## Validade convergente e discriminante
+
+Abordagem Multitrait Multimétodo de validação de escala
+
+Essa função é destinada a avaliar a validade convergente e discriminante das subescalas de uma determinada escala. Os itens pertencentes à mesma subescala devem estar altamente correlacionados entre si. Os itens pertencentes a diferentes subescalas não devem estar altamente correlacionados. Essa abordagem é mais simples e mais robusta do que a análise fatorial confirmatória (CFA). Pode ser interessante verificar (pelo menos aproximadamente) a estrutura proposta de um instrumento existente em uma nova população. A maioria dos psicometristas, entretanto, prefere o CFA [@falissard_various_2012].
+
+```{r echo=TRUE}
+vars <- list()
+for (i in 1:length(mdl)){
+	fator <- str_extract_all(mdl,'[a-zA-Z0-9]+')[[i]][1]
+	vars[[i]] <- str_extract_all(mdl,'[a-zA-Z0-9]+')[[i]][-1]
+}
+y <- psy::mtmm(tbl,vars, color=TRUE, itemTot=TRUE, graphItem=FALSE,
+							 stripChart=FALSE, namesDim=NULL)
+```
+# Referências {-}
+
+<div id="refs"></div>
+
+# Apêndice {-}
+
+Significado das variáveis do modelo.
+
+| Variável | Pergunta |
+|----------|--------|
+| CIDADE | CIDADE |
+| PF1 | Você mora na cidade de ________________? |
+| PF2 | Tempo que mora na cidade |
+| IDADE1 | IDADE |
+| SEXO | SEXO |
+| P1A | Você diria que tem muito, pouco ou nenhum interesse pela Copa do Mundo de Futebol de 2014 realizada no Brasil? |
+| P1B | De um modo geral, para você, a Copa do Mundo no Brasil, foi ótima, boa, regular, ruim ou péssima? |
+| P1CA | A Copa aproximou a comunidade brasileira |
+| P1CB | A Copa foi uma oportunidade para os brasileiros conhecerem novas pessoas |
+| P1CC | A Copa promoveu o sentimento de orgulho entre os brasileiros |
+| P1CD | A Copa serviu para estreitar os laços de coesão entre os moradores da cidade |
+| P1CE | A Copa diminuiu a qualidade de vida dos moradores da cidade |
+| P1CF | A Copa levou à superlotação das instalações e da infraestrutura da cidade |
+| P1CG | A Copa aumentou os índices de violência |
+| P1CH | A Copa aumentou os índices de prostituição |
+| P1CI | A Copa aumentou a consciência ambiental |
+| P1CJ | A Copa trouxe mais agressões ao meio ambiente |
+| P1CK | A Copa aumentou os índices de poluição sonora, visual e do ar |
+| P1CL | A Copa melhorou a conservação e a proteção do meio ambiente |
+| P1CM | A Copa aumentou o lixo e a desorganização na cidade |
+| P1CN | A Copa deu oportunidades de emprego para os moradores da cidade |
+| P1CO | A Copa melhorou os serviços públicos e infraestrutura da cidade |
+| P1CP | A Copa aumentou as oportunidades de negócios |
+| P1CQ | A Copa promoveu a regeneração e o desenvolvimento das cidades |
+| P1CR | A Copa aumentou a exposição do Brasil na mídia internacional |
+| P1CS | A Copa melhorou a imagem internacional do Brasil |
+| P1CT | A Copa promoveu o Brasil como um destino turístico |
+| P1CU | A Copa trouxe aumento de impostos para os brasileiros |
+| P1CV | Eu estava bem informado(a) sobre a Copa do Mundo de 2014 |
+| P1CW | Eu estava ciente dos possíveis impactos da Copa na minha cidade |
+| P1CX | Eu entendi o papel do Governo na Organização da Copa |
+| P1CY | Eu entendi o papel do Comité Organizador na organização da Copa |
+| P2A | Me senti fascinado |
+| P2B | Me senti Inspirado |
+| P2C | Me senti Aborrecido |
+| P2D | Me senti Provocado |
+| P2E | Me senti Insatisfeito |
+| P2F | Me senti Maravilhado |
+| P2G | Me senti Surpreendido |
+| P2H | Me senti Nervoso |
+| P2I | Eu senti Amor |
+| P2J | Eu senti Carinho |
+| P2K | Eu senti Compaixão |
+| P2L | Eu me senti Triste |
+| P2M | Eu me senti Feliz |
+| P2N | Eu me senti Tenso |
+| P2O | Eu me senti Contente |
+| P2P | Eu me senti Descontente |
+| P3A | Durante a Copa do Mundo, você acompanhou os jogos que ocorreram na cidade onde você mora |
+| P3G | <none> |
+| P3H | <none> |
+| P3I | <none> |
+| P4A | Estou contente com o fato do Brasil ter sido sede da Copa do Mundo |
+| P4B | O Brasil se preparou para sediar a Copa do Mundo |
+| P4C | Eu apoiei o Brasil como sede da Copa do Mundo |
+| P4D | Eu odiei a ideia do Brasil sediar a Copa do Mundo |
+| P4E | Sediar a Copa do Mundo foi desperdício dos nossos recursos |
+| P4F | Sediar a Copa do Mundo foi motivo de orgulho nacional |
+| P4G | Sediar a Copa não foi interessante para o Brasil |
+| P5A | A economia brasileira está com graves problemas |
+| P5B | O governo promoveu a criação de empregos nas cidades sede da Copa |
+| P5C | São necessários mais empregos na cidade e região |
+| P5D | Estou disposto a pagar mais impostos desde que haja maiores retornos para a população |
+| P5E | Na cidade onde moro, são necessários mais empregos para que a população jovem não tenha que migrar para outras áreas |
+| P5F | Estou satisfeito em morar nesta cidade |
+| P6AA | O Governo fez o que é correto para o bom desenvolvimento da Copa do Mundo |
+| P6AB | O Governo fez o que é correto para a boa organização da Copa do Mundo |
+| P6AC | O Governo agiu de acordo com os interesses dos moradores da cidade onde você mora |
+| P6AD | Eu confiei nas decisões tomadas pelo Governo sobre a Copa |
+| P6AE | O Governo se esforçou em incorporar os moradores da cidade no planejamento da Copa |
+| P6BA | O Comitê Organizador fez o que é correto para o bom desenvolvimento da Copa do Mundo |
+| P6BB | O Comitê Organizador fez o que é correto para a boa organização da Copa do Mundo |
+| P6BC | O Comitê Organizador agiu de acordo com os interesses dos moradores da cidade onde você mora |
+| P6BD | Eu confiei nas decisões tomadas pelo Comitê Organizador sobre a Copa |
+| P7A | Este evento significou muito para mim |
+| P7B | Estive muito apegado(a) à Copa do Mundo de 2014 |
+| P7C | Identifiquei-me muito com este evento |
+| P7D | Tive uma ligação especial com o evento e com as pessoas que ajudaram em sua organização |
+| P7E | Preferi participar deste evento esportivo do que de outros eventos |
+| P7F | Não trocaria este evento esportivo por outros eventos de lazer ou de entretenimento |
+| P7G | Eu me preocupei em receber bem os turistas que vieram à cidade assistir os jogos da Copa |
+| P7AA | Houve irregularidades na construção das obras da Copa do Mundo no Brasil |
+| P7AB | Houve empresas que não cumpriram os padrões exigidos nos projetos da Copa do Mundo no Brasil |
+| P7AC | Há uma sensação de que houve desvio de fundos públicos e superfaturamento nas obras da Copa no Brasil |
+| P7AD | Algumas obras feitas para a da Copa do Mundo no Brasil eram desnecessárias |
+| P7AE | Houve favoritismo e amiguismo na seleção de empresas para construir as obras da Copa no Brasil |
+| P7BA | As obras da Copa do Mundo no Brasil foram EXECUTADAS  de forma transparente |
+| P7BB | Todo o processo da Copa do Mundo no Brasil foi DIVULGADO pelo Governo e pela mídia de forma clara |
+| P7BC | Os moradores locais puderam ver e acompanhar claramente o progresso e a situação das obras da Copa do Mundo no Brasil |
+| P7BD | As obras da Copa do Mundo no Brasil foram REALIZADAS com total transparência |
+| P7BE | O Governo divulgou informações suficientes aos moradores locais sobre o andamento das obras da Copa do Mundo no Brasil |
+| P8A | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8B | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8C | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8D | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8E | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8F | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8G | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P8H | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona |
+| P9A | pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9B | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9C | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9D | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9E | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9F | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9G | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9H | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| P9I | Pensando nessa escala de 1 a 5, onde você se posiciona quando pensa sobre qual tipo de pessoa você é. As características descritas são opostas, por favor, utilizando essa escala, me diga onde você se posiciona: |
+| ESTCIVIL | ESTADO CIVIL |
+| PEA | OCUPAÇÃO PRINCIPAL |
+| ESCOLA | ESCOLARIDADE |
+| RENDAF | RENDA FAMILIAR MENSAL |
+| COR | COR |
+
+
